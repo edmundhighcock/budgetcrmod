@@ -27,7 +27,7 @@ class CodeRunner
 #		  "11.50",
 #			  "4506.80"]
 #
-		@phantom_results = [:date, :type, :sc, :ac, :description, :credit, :debit, :balance]	
+		@phantom_results = [:date, :type, :sc, :ac, :description, :debit, :credit, :balance]	
 		@results = [:data] + @phantom_results
 		def generate_input_file
 			FileUtils.cp @data_file.sub(/~/, ENV['HOME']), @directory + '/data.cvs'
@@ -56,6 +56,7 @@ class CodeRunner
 		def parameter_string
 			""
 		end
+		
 		def generate_phantom_runs
 			@data.each do |dataset|
 				phantom = create_phantom
@@ -93,6 +94,56 @@ class CodeRunner
 			sum
 		end
 
+		def self.budget_expenditure(runner, budget, budget_info, start_date)
+			dates = []
+			expenditures = []
+			budget_items = []
+			date = budget_info[:end]||Date.today
+			start_date = [(budget_info[:start]||start_date), start_date].max
+			expenditure = 0
+			items_temp = []
+			items = runner.phantom_run_list.values.find_all{|r| r.budget == budget and r.in_date(budget_info)}
+			#ep ['items', items]
+			#ep ['budget', budget]
+			counter = 0
+			case budget_info[:period][1]
+			when :month
+				while date > start_date
+					items_temp += items.find_all{|r| r.date == date}
+				  if date.mday == (budget_info[:monthday] or 1)
+						counter +=1
+						if counter % budget_info[:period][0] == 0
+							expenditure = (items_temp.map{|r| r.debit - r.credit}+[0]).sum
+							dates.push date
+							expenditures.push expenditure
+							budget_items.push items_temp
+							items_temp = []
+							expenditure = 0
+						end
+					end
+					date-=1
+				end
+			when :day
+				while date > start_date
+					items_temp += items.find_all{|r| r.date == date}
+					#expenditure += (budget_items[-1].map{|r| r.debit}+[0]).sum
+					counter +=1
+					if counter % budget_info[:period][0] == 0
+						expenditure = (items_temp.map{|r| r.debit - r.credit}+[0]).sum
+						dates.push date
+						expenditures.push expenditure
+						budget_items.push items_temp
+						items_temp = []
+						expenditure = 0
+					end
+					date-=1
+				end
+			end
+
+			[dates, expenditures, budget_items]
+
+		end
+
 		def self.sum_regular(regular_items, end_date)
 			today = Date.today
 			sum = regular_items.inject(0) do |sum, (name, item)|	
@@ -109,17 +160,17 @@ class CodeRunner
 						counter = 0
 						case info[:period][1]
 						when :month
-							while date >= info[:start]
+							while date >= (info[:start] or Date.today)
 								counter +=1 if date.mday == (info[:monthday] or 1)
 								date -= 1
 							end
 						when :year
-							while date >= info[:start]
+							while date >= (info[:start] or Date.today) 
 								counter +=1 if date.yday == (info[:yearday] or 1)
 								date -= 1
 							end
 						when :day
-							while date > info[:start]
+							while date > (info[:start] or Date.today)
 								counter +=1
 								date -= 1
 							end
@@ -145,7 +196,7 @@ class CodeRunner
 							date += 1
 						end
 					when :day
-						while date > finish
+						while date <= finish
 							nunits += 1 if counter % info[:period][0] == 0
 							counter +=1
 							date += 1
@@ -167,13 +218,29 @@ class CodeRunner
 										 #(ndays / info[:period][0]).ceil
 									 #end
 				 	#value + number * info[:size]
-					eputs "Regular Expenditure Item: #{sprintf("%10s", name)} -- #{nunits} payments, total #{nunits * info[:size]}"
+					#eputs "Regular Expenditure Item: #{sprintf("%10s", name)} -- #{nunits} payments, total #{nunits * info[:size]}"
 					value + nunits * info[:size]
 
 				end
-				rcp.excluding.include?(name) ? sum : sum + value
+				(rcp.excluding? and rcp.excluding.include?(name)) ? sum : sum + value
 			end
 			sum
+		end
+		def self.predictable_phantom_ids(runner)
+			runner.instance_variable_set(:@phantom_run_list, {})
+			runner.instance_variable_set(:@phantom_ids, [])
+			runner.instance_variable_set(:@phantom_id, -1)
+			runner.run_list.each{|r| r.instance_variable_set(:@phantom_runs, [])}
+			runner.run_list.values.sort_by{|r| r.id}.each{|r| r.generate_phantom_runs}
+			#runner.save_large_cache
+		end
+		def self.kit_time_format_x(kit)
+			 kit.gp.timefmt = %["%s"]
+			 kit.data.each{|dk| dk.gp.using = "1:2"}
+			 kit.gp.xdata = "time"
+			 kit.gp.format = %[x "%d %B %Y"]
+			 kit.gp.xtics = "rotate by 340 offset 0,-0.5 #{24*3600*14}"
+			 kit.gp.xtics = "rotate by 340 offset 0,-0.5 "
 		end
 
 		def self.print_budget(options={})
@@ -193,18 +260,41 @@ class CodeRunner
 			puts "Weekly Budget:  #{total / ((end_date.to_datetime.to_time.to_i - Time.now.to_i) / 3600 / 24 /7)}"
 		end
 
+		def self.budgets_with_averages(budgets, start_date)
+		 projected_budgets = budgets.dup
+		 projected_budgets.each{|key,v| projected_budgets[key]=projected_budgets[key].dup}
+		 projected_budgets.each do |budget, budget_info|
+			 #budget_info = budgets[budget]
+			 dates, expenditures, items = budget_expenditure(runner, budget, budget_info, start_date)
+			 budget_info[:size] = expenditures.mean
+		 end
+		 projected_budgets
+		end
+
 		def self.latex_report(options={})
 			runner = CodeRunner.fetch_runner(Y: Dir.pwd, h: :phantom)
+			predictable_phantom_ids(runner)
 			numdays = options[:days]
+			days_ahead = options[:days_ahead]
 			runs = runner.phantom_run_list.values
 			accounts = runs.map{|r| r.account}.uniq
 			ep 'Accounts', accounts
+		 projected_budgets = Hash[BUDGETS.dup.find_all{|k,v| v[:discretionary]}]
+		 projected_budgets = budgets_with_averages(projected_budgets, Date.today - numdays)
+		 #projected_budgets.each{|key,v| projected_budgets[key]=projected_budgets[key].dup}
+		 #projected_budgets.each do |budget, budget_info|
+			 ##budget_info = budgets[budget]
+			 #dates, expenditures, items = budget_expenditure(runner, budget, budget_info, Date.today - numdays)
+			 #budget_info[:size] = expenditures.mean
+		 #end
+		 ep 'projected_budgets', projected_budgets
 			File.open('report.tex', 'w') do |file|
 				file.puts <<EOF
 \\documentclass{article}
 \\usepackage[cm]{fullpage}
 \\usepackage{tabulary}
 \\usepackage{graphicx}
+\\newcommand\\Tstrut{\\rule{0pt}{2.8ex}}
 \\begin{document}
 \\title{#{numdays}-day Budget Report}
 \\maketitle
@@ -229,15 +319,110 @@ Income & #{runs.find_all{|r| r.account==acc &&
 
 \\section{Graphs of Recent Balances}
 #{accounts.map{|acc|
+ balance = runs.find_all{|r| r.account==acc}.sort_by{|r| r.date }[-1].balance
  accshort = acc.gsub(/\s/, '')
- kit = runner.graphkit(['-days_ago', 'balance'], {conditions: "account == #{acc.inspect} and days_ago < #{numdays}", sort: 'date'})
+ kit = runner.graphkit(['date.to_time.to_i', 'balance'], {conditions: "account == #{acc.inspect} and days_ago < #{numdays}", sort: 'date'})
+ futuredates = (Date.today..Date.today+days_ahead).to_a
+ #p ["Regtrans", REGULAR_TRANSFERS.values_at(*REGULAR_TRANSFERS.keys.find_all{|from,to| to == acc})]
+
+ budgets = Hash[projected_budgets.find_all{|k,v| v[:account] == acc}]
+ ep ['budgets', budgets]
+ projection = futuredates.map{|date| balance - 
+	 sum_regular(REGULAR_EXPENDITURE[acc], date) + 
+	 sum_regular(REGULAR_INCOME[acc], date) -  
+	 sum_regular(budgets, date) -  
+	 sum_future(FUTURE_EXPENDITURE[acc], date) + 
+	 sum_future(FUTURE_INCOME[acc], date) + 
+	 (REGULAR_TRANSFERS.keys.find_all{|from,to| to == acc}.map{|key|
+	 #p [acc, 'to', "key", key]
+	 sum_regular( REGULAR_TRANSFERS[key], date)
+ }.sum||0) - 
+	 (REGULAR_TRANSFERS.keys.find_all{|from,to| from == acc}.map{|key|
+	 #p [acc, 'from',"key", key]
+	 sum_regular( REGULAR_TRANSFERS[key], date)
+ }.sum||0)  
+ }
+ kit2 = GraphKit.quick_create([futuredates.map{|d| d.to_time.to_i}, projection])
+ kit += kit2
  kit.title = "Balance for #{acc}"
- kit.xlabel = "Days Ago"
+ kit.xlabel = %['Date' offset 0,-2]
+ kit.xlabel = nil
  kit.ylabel = "Balance"
- kit.gnuplot_write("#{accshort}_balance.eps")
-"\\includegraphics[width=4.0in]{#{accshort}_balance.eps}"
+
+ kit.data[0].gp.title = 'Previous'
+ kit.data[1].gp.title = '0 GBP Discretionary'
+ kit.data[1].gp.title = 'Projection'
+ kit.data.each{|dk| dk.gp.with = "lp"}
+
+ kit_time_format_x(kit)
+
+ (kit).gnuplot_write("#{accshort}_balance.eps", size: "4.0in,3.0in")
+ "\\begin{center}\\includegraphics[width=4.0in]{#{accshort}_balance.eps}\\end{center}"
 }.join("\n\n")
 }
+
+
+\\section{Budget Expenditure}
+#{BUDGETS.map{|budget, budget_info| 
+	dates, expenditures, items = budget_expenditure(runner, budget, budget_info, Date.today - numdays)
+	#ep ['budget', budget, dates, expenditures]
+	kit = GraphKit.quick_create([dates.map{|d| d.to_time.to_i}, expenditures])
+	kit.data.each{|dk| dk.gp.with="boxes"}
+	kit.gp.style = "fill solid"
+	kit.title = "#{budget} Expenditure with average"
+	kit.xlabel = nil
+	kit.ylabel = "Expenditure"
+ kits = budgets_with_averages({budget => budget_info}, Date.today - numdays).map{|budget, budget_info| 
+	 kit2 = GraphKit.quick_create([
+			[dates[0], dates[-1]].map{|d| d.to_time.to_i}, 
+			[budget_info[:size], budget_info[:size]]
+	 ])
+	 kit2.data[0].gp.with = 'lp lw 4'
+	 kit2
+	}
+	#$debug_gnuplot = true
+	#kits.sum.gnuplot
+  kit += kits.sum
+	kit_time_format_x(kit)
+	#kit.gnuplot
+	kit.gnuplot_write("#{budget}.eps")
+	"\\begin{center}\\includegraphics[width=4.0in]{#{budget}.eps}\\vspace{1em}\\end{center}"
+}.join("\n\n")
+}
+
+\\section{Budget Breakdown}
+#{BUDGETS.map{|budget, budget_info| 
+	dates, expenditures, budget_items = budget_expenditure(runner, budget, budget_info, Date.today - numdays)
+	pp budget, budget_items.map{|items| items.map{|i| i.date.to_s}}
+	"\\subsection{#{budget}}" + 
+		budget_items.zip(dates, expenditures).map{|items, date, expenditure|
+		if items.size > 0
+			"
+			\\footnotesize
+			\\setlength{\\parindent}{0cm}\n\n\\begin{tabulary}{0.99\\textwidth}{ #{"c " * 4 + " L " + " r " * 2 }}
+			%\\hline
+			& #{date.to_s.latex_escape} & & & Total & #{expenditure} &  \\\\
+			\\hline
+			\\Tstrut
+				#{items.map{|r| 
+						([:id] + rcp.phantom_results - [:sc, :balance]).map{|res| 
+								r.send(res).to_s.latex_escape
+							}.join(" & ")
+						}.join("\\\\\n")
+					}
+			\\\\
+			\\hline
+			\\end{tabulary}
+			\\normalsize
+			\\vspace{1em}\n\n"
+		else 
+			""
+		end
+	}.join("\n\n")
+}.join("\n\n")
+}
+
+
 
 \\section{Recent Transactions}
 #{accounts.map{|acc| 
@@ -246,9 +431,9 @@ Income & #{runs.find_all{|r| r.account==acc &&
 #{all = runs.find_all{|r|  r.account == acc and r.days_ago < numdays}.sort_by{|r| r.date}.reverse
 ep ['acc', acc, 'ids', all.map{|r| r.id}, 'size', all.size]
 all.pieces((all.size.to_f/50.to_f).ceil).map{|piece|
-"\\begin{tabulary}{0.95\\textwidth}{ #{"c " * 4 + " L " + " c " * 3}}
+"\\setlength{\\parindent}{0cm}\n\n\\begin{tabulary}{0.99\\textwidth}{ #{"c " * 4 + " L " + " r " * 3 + "l"}}
 		#{piece.map{|r| 
-	  rcp.phantom_results.map{|res| r.send(res).to_s.latex_escape
+	  ([:id] + rcp.phantom_results - [:sc] + [:budget]).map{|res| r.send(res).to_s.latex_escape
 	  #rcp.phantom_results.map{|res| r.send(res).to_s.gsub(/(.{20})/, '\1\\\\\\\\').latex_escape
   }.join(" & ")
 }.join("\\\\\n")}
