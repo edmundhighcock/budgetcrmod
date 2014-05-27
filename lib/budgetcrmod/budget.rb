@@ -62,7 +62,7 @@ class CodeRunner
 		end
 		def print_out_line
 			if @is_component
-				sprintf("%4d. %10s %3s %6s %8s %-60s %8s %8s %8s", id, *rcp.component_results.map{|res| send(res)})
+				sprintf("%4d. %10s %3s %6s %8s %-60s %8s %8s %8s %8s %8s", id, *rcp.component_results.map{|res| send(res)}, budget, category)
 			else
 				#pr = component_runs.sort_by{|r| r.id}
 				"#{sprintf("%3d", @id)}. #{sprintf("%-20s", @account)} Start: #{start_date}   End: #{end_date}   Final Balance: #{final_balance} "
@@ -114,11 +114,11 @@ class CodeRunner
 		end
 
 
-		def self.sum_future(future_items, end_date)
+		def self.sum_future(future_items, end_date, options={})
 			sum = future_items.inject(0) do |sum, (name, item)| 
 				item = [item] unless item.kind_of? Array
 				value = item.inject(0) do |value,info|
-					value += info[:size] unless (Date.today > info[:date]) or (info[:date] > end_date) # add unless we have already passed that date
+					value += info[:size] unless (options[:today]||Date.today > info[:date]) or (info[:date] > end_date) # add unless we have already passed that date
 					value
 				end
 				rcp.excluding.include?(name) ? sum : sum + value
@@ -126,11 +126,11 @@ class CodeRunner
 			sum
 		end
 
-		def self.budget_expenditure(runner, budget, budget_info, start_date)
+		def self.budget_expenditure(runner, budget, budget_info, start_date, options={})
 			dates = []
 			expenditures = []
 			budget_items = []
-			date = budget_info[:end]||Date.today
+			date = budget_info[:end]||options[:today]||Date.today
 			start_date = [(budget_info[:start]||start_date), start_date].max
 			expenditure = 0
 			items_temp = []
@@ -183,8 +183,8 @@ class CodeRunner
 
 		end
 
-		def self.sum_regular(regular_items, end_date)
-			today = Date.today
+		def self.sum_regular(regular_items, end_date, options={})
+			today = options[:today]||Date.today
 			sum = regular_items.inject(0) do |sum, (name, item)|	
 				item = [item] unless item.kind_of? Array
 #			  ep item
@@ -299,12 +299,12 @@ class CodeRunner
 			puts "Weekly Budget:  #{total / ((end_date.to_datetime.to_time.to_i - Time.now.to_i) / 3600 / 24 /7)}"
 		end
 
-		def self.budgets_with_averages(runner, budgets, start_date)
+		def self.budgets_with_averages(runner, budgets, start_date, options={})
 		 projected_budgets = budgets.dup
 		 projected_budgets.each{|key,v| projected_budgets[key]=projected_budgets[key].dup}
 		 projected_budgets.each do |budget, budget_info|
 			 #budget_info = budgets[budget]
-			 dates, expenditures, items = budget_expenditure(runner, budget, budget_info, start_date)
+			 dates, expenditures, items = budget_expenditure(runner, budget, budget_info, start_date, today: options[:today])
 			 budget_info[:size] = expenditures.mean rescue 0.0
 		 end
 		 projected_budgets
@@ -312,8 +312,9 @@ class CodeRunner
 
 		def self.latex_budget_transfers(runner, budgets, options)
 			numdays = options[:days]
+			today = options[:today]||Date.today
 "#{budgets.map{|budget, budget_info| 
-	dates, expenditures, items = budget_expenditure(runner, budget, budget_info, Date.today - numdays)
+	dates, expenditures, items = budget_expenditure(runner, budget, budget_info, today - numdays, today: options[:today])
 	#ep ['budget', budget, dates, expenditures]
 	kit = GraphKit.quick_create([dates.map{|d| d.to_time.to_i}, expenditures])
 	kit.data.each{|dk| dk.gp.with="boxes"}
@@ -321,7 +322,7 @@ class CodeRunner
 	kit.xlabel = nil
 	kit.ylabel = "Expenditure"
 	unless options[:transfers]
-	 kits = budgets_with_averages(runner, {budget => budget_info}, Date.today - numdays).map{|budget, budget_info| 
+	 kits = budgets_with_averages(runner, {budget => budget_info}, today - numdays, today: today).map{|budget, budget_info| 
 		 #ep 'Budget is ', budget
 		 kit2 = GraphKit.quick_create([
 				[dates[0], dates[-1]].map{|d| d.to_time.to_i}, 
@@ -349,10 +350,11 @@ class CodeRunner
 		def self.latex_report(options={})
 			runner = CodeRunner.fetch_runner(Y: Dir.pwd, h: :component)
 			numdays = options[:days]
+			today = options[:today] || Date.today
 			# Delete budgets that contain no items
 			actual_budgets = BUDGETS.dup
 			BUDGETS.keys.each do |budget|
-				actual_budgets.delete(budget) if budget_expenditure(runner, budget, BUDGETS[budget], Date.today - numdays)[0].size == 0
+				actual_budgets.delete(budget) if budget_expenditure(runner, budget, BUDGETS[budget], today - numdays, today: today)[0].size == 0
 			end
 			#predictable_component_ids(runner)
 			days_ahead = options[:days_ahead]
@@ -361,11 +363,11 @@ class CodeRunner
 			accounts = runs.map{|r| r.account}.uniq
 			ep 'Accounts', accounts
 		 projected_budgets = Hash[actual_budgets.dup.find_all{|k,v| v[:discretionary]}]
-		 projected_budgets = budgets_with_averages(runner,projected_budgets, Date.today - numdays)
+		 projected_budgets = budgets_with_averages(runner,projected_budgets, today - numdays, today: today)
 		 #projected_budgets.each{|key,v| projected_budgets[key]=projected_budgets[key].dup}
 		 #projected_budgets.each do |budget, budget_info|
 			 ##budget_info = budgets[budget]
-			 #dates, expenditures, items = budget_expenditure(runner, budget, budget_info, Date.today - numdays)
+			 #dates, expenditures, items = budget_expenditure(runner, budget, budget_info, today - numdays)
 			 #budget_info[:size] = expenditures.mean
 		 #end
 		 ep 'projected_budgets', projected_budgets
@@ -405,24 +407,24 @@ Income & #{runs.find_all{|r| r.account==acc &&
  balance = runs.find_all{|r| r.account==acc}.sort_by{|r| r.date }[-1].balance
  accshort = acc.gsub(/\s/, '')
  kit = runner.graphkit(['date.to_time.to_i', 'balance'], {conditions: "account == #{acc.inspect} and days_ago < #{numdays}", sort: 'date'})
- futuredates = (Date.today..Date.today+days_ahead).to_a
+ futuredates = (today..today+days_ahead).to_a
  #p ["Regtrans", REGULAR_TRANSFERS.values_at(*REGULAR_TRANSFERS.keys.find_all{|from,to| to == acc})]
 
  budgets = Hash[projected_budgets.find_all{|k,v| v[:account] == acc}]
  ep ['budgets', budgets]
  projection = futuredates.map{|date| balance - 
-	 sum_regular(REGULAR_EXPENDITURE[acc], date) + 
-	 sum_regular(REGULAR_INCOME[acc], date) -  
-	 sum_regular(budgets, date) -  
-	 sum_future(FUTURE_EXPENDITURE[acc], date) + 
-	 sum_future(FUTURE_INCOME[acc], date) + 
+	 sum_regular(REGULAR_EXPENDITURE[acc], date, today: today) + 
+	 sum_regular(REGULAR_INCOME[acc], date, today: today) -  
+	 sum_regular(budgets, date, today: today) -  
+	 sum_future(FUTURE_EXPENDITURE[acc], date, today: today) + 
+	 sum_future(FUTURE_INCOME[acc], date, today: today) + 
 	 (REGULAR_TRANSFERS.keys.find_all{|from,to| to == acc}.map{|key|
 	 #p [acc, 'to', "key", key]
-	 sum_regular( REGULAR_TRANSFERS[key], date)
+	 sum_regular( REGULAR_TRANSFERS[key], date, today: today)
  }.sum||0) - 
 	 (REGULAR_TRANSFERS.keys.find_all{|from,to| from == acc}.map{|key|
 	 #p [acc, 'from',"key", key]
-	 sum_regular( REGULAR_TRANSFERS[key], date)
+	 sum_regular( REGULAR_TRANSFERS[key], date, today: today)
  }.sum||0)  
  }
  kit2 = GraphKit.quick_create([futuredates.map{|d| d.to_time.to_i}, projection])
@@ -506,7 +508,7 @@ This section sums items from budgets drawn from an alternate account, i.e. it de
 
 \\section{Budget and Transfer Breakdown}
 #{(TRANSFERS + actual_budgets).map{|budget, budget_info| 
-	dates, expenditures, budget_items = budget_expenditure(runner, budget, budget_info, Date.today - numdays)
+	dates, expenditures, budget_items = budget_expenditure(runner, budget, budget_info, today - numdays, today: today)
 	pp budget, budget_items.map{|items| items.map{|i| i.date.to_s}}
 	"\\subsection{#{budget}}" + 
 		budget_items.zip(dates, expenditures).map{|items, date, expenditure|
@@ -565,4 +567,4 @@ EOF
 end #class CodeRunner
 
 p Dir.pwd
-require Dir.pwd + '/local_customisations.rb'
+#require Dir.pwd + '/local_customisations.rb'
