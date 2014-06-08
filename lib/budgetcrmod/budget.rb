@@ -3,6 +3,10 @@ class String
 	def latex_escape
 		self.gsub(/(?<!\\)([%_&^])/, '\\\\\1')
 	end
+	#alias :old_to_f :to_f
+	#def to_f
+		#gsub(/,/, '').old_to_f
+	#end
 end
 
 class Date
@@ -68,8 +72,13 @@ class CodeRunner
 		DOUBLE_STRING=/"(?:\\\\|\\"|[^"\\]|\\[^"\\])*"/
 		def process_directory_code_specific
 			@status=:Complete
-			data = File.read('data.cvs')
-			data = data.split("\n").map do 	|line| 
+			data = File.read('data.cvs').split(/\n\r|\r\n|\n|\r/)
+			if data[0] =~ /^\d{2} \w{3} \d\d,/ # BarclayCard format
+				data.unshift 'date,description,type,user,expensetype,withdrawal,withdrawal'
+			end
+
+			@first_line_string = data[0].dup
+			data = data.map do 	|line| 
 				matches = line.scan(Regexp.new("((?:#{DOUBLE_STRING}|[^,])*)(?:,|$)"))
 				matches.flatten
 			end
@@ -77,15 +86,15 @@ class CodeRunner
 			@data = data
 			@first_line = @data.shift.join(',')
 		end
-		def reversed?
+		#def reversed?
 			#case account_type(@account)
 			#when :Asset
-				@first_line =~ /Debit.*Credit/
+				#@first_line =~ /Debit.*Credit/
 			#end
-		end
+		#end
 		def print_out_line
 			if @is_component
-				sprintf("%4d. %10s %10s %3s  %-30s %8s %8s %8s %8s %8s", id, account, *rcp.component_results.find_all{|r| r!=:ac and r!=:sc}.map{|res| send(res)}, budget, external_account)
+				sprintf("%4d. %10s %10s %3s  %-40s %8s %8s %8s %8s %8s", id, account, *rcp.component_results.find_all{|r| r!=:ac and r!=:sc}.map{|res| send(res).to_s.gsub(/\s+/, ' ')}, external_account, sub_account)
 			else
 				#pr = component_runs.sort_by{|r| r.id}
 				"#{sprintf("%3d", @id)}. #{sprintf("%-20s", @account)} Start: #{start_date}   End: #{end_date}   Final Balance: #{final_balance} "
@@ -109,27 +118,69 @@ class CodeRunner
 			""
 		end
 
+		def sub_account
+			cache[:sub_account] ||= super
+		end
+		def external_account
+			cache[:external_account] ||= super
+		end
+
 		#def external_account
-			#(sub_account.to_s + '_' + budget.to_s).to_sum
+			#(budget.to_s + '_' + sub_account.to_s).to_sym
 		#end
 		
+		def csv_data_fields
+			case @first_line_string
+			when /Date,Type,Sort Code,Account Number,Description,In,Out,Balance/ # Old Lloyds Bank Format
+				[:date, :type, :sc, :ac, :description, :deposit, :withdrawal, :balance]
+			when /Transaction Date,Transaction Type,Sort Code,Account Number,Transaction Description,Debit Amount,Credit Amount,Balance/ # 2013 Lloyds Bank Format, NB they are using debit and credit as if the account is an equity account (when of course a bank account is really an asset)
+				[:date, :type, :sc, :ac, :description, :withdrawal, :deposit, :balance]
+			when /Date,Date entered,Reference,Description,Amount/ # Lloyds Credit Card statement
+				[:date, :dummy, :dummy, :description, :withdrawal]
+			when /date,description,type,user,expensetype,withdrawal,withdrawal/
+				[:date,:description,:type,:dummy,:dummy, :withdrawal, :withdrawal]
+
+			end
+		end
+
+		#def withdrawn
+			#@withdrawn||0.0
+		#end
+
+		def has_balance? 
+			@has_balance ||= csv_data_fields.include? :balance
+		end
+
+		attr_accessor :dummy
+
+
+		def set_zeroes
+			@withdrawal||=0.0
+			@deposit||=0.0
+		end
 		def generate_component_runs
 			@runner.cache[:data] ||= []
-			reslts = rcp.component_results
-			if reversed?
-				reslts[5] = :withdrawal
-				reslts[6] = :deposit
-			end
+			#reslts = rcp.component_results
+			#if reversed?
+				#reslts[5] = :withdrawal
+				#reslts[6] = :deposit
+			#end
 			@data.each do |dataset|
 				next if @runner.cache[:data].include? dataset and Date.parse(dataset[0]) > Date.parse("1/1/2013")
 				component = create_component
+				reslts = csv_data_fields
 				reslts.each_with_index do |res,index|
 					value = dataset[index]
-#					ep value
+					#ep value
 					value = Date.parse value if res == :date
-					value = value.to_f if [:deposit, :withdrawal, :balance].include? res
+					if [:deposit, :withdrawal, :balance].include? res
+						value = value.gsub(/[",]/, '')
+						next unless value =~ /\d/
+						value = value.to_f 
+					end
 					component.set(res, value)
 					component.set(:data_line, reslts.map{|r| component.send(r).to_s}.join(','))
+					component.set_zeroes
 				end
 				@runner.cache[:data].push dataset
 				#component.account = @account
