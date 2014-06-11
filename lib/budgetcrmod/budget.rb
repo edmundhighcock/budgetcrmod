@@ -49,7 +49,7 @@ class CodeRunner
 #			  "4506.80"]
 #
 		@component_results = [:date, :type, :sc, :ac, :description, :deposit, :withdrawal, :balance]	
-		@results = [:data, :data_line] + @component_results
+		@results = [:date_i, :data, :data_line] + @component_results
 		def generate_input_file
 			FileUtils.cp @data_file.sub(/~/, ENV['HOME']), @directory + '/data.cvs'
 		end
@@ -181,6 +181,7 @@ class CodeRunner
 					component.set(res, value)
 					component.set(:data_line, reslts.map{|r| component.send(r).to_s}.join(','))
 					component.set_zeroes
+					component.date_i = component.date.to_datetime.to_time.to_i
 				end
 				@runner.cache[:data].push dataset
 				#component.account = @account
@@ -189,6 +190,8 @@ class CodeRunner
 		def days_ago(today = Date.today)
 			#ep ['today', today, date]
 #			sprintf("%04d%02d%02d", date.year, date.month, date.day).to_i
+			#cache[:days_ago] ||= {}
+			#cache[:days_ago][today.to_s] ||=
 			- ((date.to_datetime.to_time.to_i - today.to_datetime.to_time.to_i) / 24 / 3600).to_i
 		end
 		def idate
