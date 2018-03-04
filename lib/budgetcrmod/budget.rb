@@ -1,3 +1,11 @@
+class Float
+	def to_str
+		sprintf("%.2f", self)
+	end
+	def to_s
+		sprintf("%.2f", self)
+	end
+end
 require 'date'
 class String
 	def latex_escape
@@ -72,7 +80,24 @@ class CodeRunner
 		DOUBLE_STRING=/"(?:\\\\|\\"|[^"\\]|\\[^"\\])*"/
 		def process_directory_code_specific
 			@status=:Complete
-			data = File.read('data.cvs').split(/\n\r|\r\n|\n|\r/)
+			data = File.read('data.cvs')
+      #p ['encoding', data.encoding]
+      #data.encode(Encoding::UTF_8)
+      tries = 1 
+      begin
+        data = data.split(/\n\r|\r\n|\n|\r/)
+      rescue
+        #require 'ensure/encoding.rb'
+        if tries > 0
+          if tries==1
+            #data.force_encoding('iso-8859-1')
+            data = File.read('data.cvs', encoding: "ISO-8859-1")
+            data = data.encode('utf-8')
+          end
+          tries-=1
+          retry
+        end
+      end
 			if data[0] =~ /^\d{2} \w{3} \d\d,/ # BarclayCard format
 				data.unshift 'date,description,type,user,expensetype,withdrawal,withdrawal'
 			end
@@ -85,6 +110,7 @@ class CodeRunner
 			#pp data
 			@data = data
 			@first_line = @data.shift.join(',')
+      generate_component_runs
 		end
 		#def reversed?
 			#case account_type(@account)
@@ -117,6 +143,12 @@ class CodeRunner
 		def parameter_string
 			""
 		end
+    #def external_account
+      #name = super
+      #if ACCOUNT_INFO[name] and ACCOUNT_INFO[name][:currencies].size > 2
+    #end
+    #def sub_account
+    #end
 
 		def sub_account
 			cache[:sub_account] ||= super
@@ -139,7 +171,10 @@ class CodeRunner
 				[:date, :dummy, :dummy, :description, :withdrawal]
 			when /date,description,type,user,expensetype,withdrawal,withdrawal/
 				[:date,:description,:type,:dummy,:dummy, :withdrawal, :withdrawal]
-
+      when /Datum,Transaktion,Kategori,Belopp,Saldo/ # Nordea.se privat, Belopp is positive when the asset increases
+        [:date,:description,:dummy,:deposit,:balance]
+      when /Bokföringsdatum,Transaktionsreferens,Mottagare,Belopp,Valuta/ # Forex.se privat, Belopp is positive when the asset increases
+        [:date,:description,:dummy,:deposit,:dummy]
 			end
 		end
 
@@ -159,6 +194,9 @@ class CodeRunner
 			@deposit||=0.0
 		end
 		def generate_component_runs
+      #puts Kernel.caller
+      #p ['generate_component_runs', @component_runs.class, (@component_runs.size rescue nil), @runner.component_run_list.size, @directory]
+      return if @component_runs and @component_runs.size > 0
 			@runner.cache[:data] ||= []
 			#reslts = rcp.component_results
 			#if reversed?
@@ -166,24 +204,39 @@ class CodeRunner
 				#reslts[6] = :deposit
 			#end
 			@data.each do |dataset|
-				next if @runner.cache[:data].include? dataset and Date.parse(dataset[0]) > Date.parse("1/1/2013")
+				#next if @runner.cache[:data].include? dataset and Date.parse(dataset[0]) > Date.parse("1/1/2013")
+        next if @runner.component_run_list.map{|k,v| v.instance_variable_get(:@dataset)}.include? dataset and Date.parse(dataset[0]) > Date.parse("1/1/2013")
+        next if @first_line_string =~ /^Datum/ and dataset[1] =~ /Reservation/
 				component = create_component
+        ep 'Generating Component', @component_runs.size
 				reslts = csv_data_fields
 				reslts.each_with_index do |res,index|
 					value = dataset[index]
 					#ep value
 					value = Date.parse value if res == :date
 					if [:deposit, :withdrawal, :balance].include? res
-						value = value.gsub(/[",]/, '')
+            case @first_line_string
+            when /^Datum/i # we are dealing with European numbers
+              value = value.gsub(/[."]/, '')
+              value = value.sub(/[,]/, '.')
+            else
+              value = value.gsub(/[",]/, '')
+            end
 						next unless value =~ /\d/
 						value = value.to_f 
 					end
+          component.instance_variable_set(:@dataset, dataset)
 					component.set(res, value)
-					component.set(:data_line, reslts.map{|r| component.send(r).to_s}.join(','))
 					component.set_zeroes
+					component.set(:data_line, reslts.map{|r| component.send(r).to_s}.join(','))
 					component.date_i = component.date.to_datetime.to_time.to_i
 				end
+        if component.deposit < 0.0 and component.withdrawal == 0.0
+          component.withdrawal = -component.deposit
+          component.deposit = 0.0
+        end
 				@runner.cache[:data].push dataset
+        component.external_account; component.sub_account # Triggers interactive account choices
 				#component.account = @account
 			end
 		end
@@ -366,8 +419,10 @@ class CodeRunner
 			 kit.data.each{|dk| dk.gp.using = "1:2"}
 			 kit.gp.xdata = "time"
 			 kit.gp.format = %[x "%d %B %Y"]
+			 kit.gp.format = %[x "%b %Y"]
+       kit.gp.mxtics = "30"
 			 kit.gp.xtics = "rotate by 340 offset 0,-0.5 #{24*3600*14}"
-			 kit.gp.xtics = "rotate by 340 offset 0,-0.5 "
+			 kit.gp.xtics = "rotate by 340 offset 0,-0.5 2629746"
 		end
 
 		def self.print_budget(options={})
