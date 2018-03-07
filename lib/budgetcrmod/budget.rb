@@ -9,7 +9,7 @@ end
 require 'date'
 class String
 	def latex_escape
-		self.gsub(/(?<!\\)([%_&^])/, '\\\\\1')
+		self.gsub(/(?<!\\)([$%_&^])/, '\\\\\1')
 	end
 	#alias :old_to_f :to_f
 	#def to_f
@@ -105,6 +105,7 @@ class CodeRunner
 			@first_line_string = data[0].dup
 			data = data.map do 	|line| 
 				matches = line.scan(Regexp.new("((?:#{DOUBLE_STRING}|[^,])*)(?:,|$)"))
+        pp matches
 				matches.flatten
 			end
 			#pp data
@@ -175,6 +176,10 @@ class CodeRunner
         [:date,:description,:dummy,:deposit,:balance]
       when /Bokföringsdatum,Transaktionsreferens,Mottagare,Belopp,Valuta/ # Forex.se privat, Belopp is positive when the asset increases
         [:date,:description,:dummy,:deposit,:dummy]
+      when /Datum,Text,Belopp/ #Ecster Credit Card
+        [:date,:description,:withdrawal]
+      when /Effective Date,Entered Date,Transaction Description,Amount/ #QudosBank, the first field is blank
+        [:dummy,:date,:description,:deposit]
 			end
 		end
 
@@ -205,7 +210,7 @@ class CodeRunner
 			#end
 			@data.each do |dataset|
 				#next if @runner.cache[:data].include? dataset and Date.parse(dataset[0]) > Date.parse("1/1/2013")
-        next if @runner.component_run_list.map{|k,v| v.instance_variable_get(:@dataset)}.include? dataset and Date.parse(dataset[0]) > Date.parse("1/1/2013")
+        next if @runner.component_run_list.map{|k,v| v.instance_variable_get(:@dataset)}.include? dataset # and Date.parse(dataset[0]) > Date.parse("1/1/2013")
         next if @first_line_string =~ /^Datum/ and dataset[1] =~ /Reservation/
 				component = create_component
         ep 'Generating Component', @component_runs.size
@@ -217,7 +222,7 @@ class CodeRunner
 					if [:deposit, :withdrawal, :balance].include? res
             case @first_line_string
             when /^Datum/i # we are dealing with European numbers
-              value = value.gsub(/[."]/, '')
+              value = value.gsub(/[." ]/, '')
               value = value.sub(/[,]/, '.')
             else
               value = value.gsub(/[",]/, '')
@@ -229,8 +234,8 @@ class CodeRunner
 					component.set(res, value)
 					component.set_zeroes
 					component.set(:data_line, reslts.map{|r| component.send(r).to_s}.join(','))
-					component.date_i = component.date.to_datetime.to_time.to_i
 				end
+        component.date_i = component.date.to_datetime.to_time.to_i
         if component.deposit < 0.0 and component.withdrawal == 0.0
           component.withdrawal = -component.deposit
           component.deposit = 0.0
