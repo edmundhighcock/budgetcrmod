@@ -39,7 +39,7 @@ class CodeRunner
 
     @code_module_folder = File.dirname(File.expand_path(__FILE__)) # i.e. the directory this file is in
 
-    @component_results = [:date, :type, :sc, :ac, :description, :deposit, :withdrawal, :balance]	
+    @component_results = [:date, :type, :sc, :ac, :description, :deposit, :withdrawal, :balance, :description2]	
     @results = [:date_i, :data, :data_line, :dataset] + @component_results
     def generate_input_file
       FileUtils.cp @data_file.sub(/~/, ENV['HOME']), @directory + '/data.cvs'
@@ -165,6 +165,8 @@ class CodeRunner
         [:dummy,:date,:description,:deposit]
       when /Date,Amount,Currency,Description,"Payment Reference","Running Balance","Exchange Rate","Payer Name","Payee Name","Payee Account Number",Merchant/ #TransferWise
         [:date,:deposit,:dummy,:description,:dummy,:balance,:dummy,:dummy,:dummy,:dummy,:dummy]
+      when /"TransferWise ID",Date,Amount,Currency,Description,"Payment Reference","Running Balance","Exchange From","Exchange To","Exchange Rate","Payer Name","Payee Name","Payee Account Number",Merchant,"Total fees"/ #TransferWise New
+        [:dummy,:date,:deposit,:dummy,:description,:description2,:balance,:dummy,:dummy,:dummy,:dummy,:dummy,:dummy,:dummy,:dummy]
       end
     end
 
@@ -222,6 +224,9 @@ class CodeRunner
         component.set(:data_line, reslts.map{|r| component.send(r).to_s}.join(','))
         component.set(:dataset, dataset)
         component.date_i = component.date.to_datetime.to_time.to_i
+        if component.description2 and component.description
+          component.description += ":" + component.description2
+        end
         if component.deposit < 0.0 and component.withdrawal == 0.0
           component.withdrawal = -component.deposit
           component.deposit = 0.0
