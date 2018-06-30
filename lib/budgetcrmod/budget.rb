@@ -1,7 +1,7 @@
 require 'date'
 class String
   def latex_escape
-    self.gsub(/(?<!\\)([$%_&^])/, '\\\\\1')
+    self.gsub(/(?<!\\)([$%_&^#])/, '\\\\\1')
   end
   #alias :old_to_f :to_f
   #def to_f
@@ -39,8 +39,9 @@ class CodeRunner
 
     @code_module_folder = File.dirname(File.expand_path(__FILE__)) # i.e. the directory this file is in
 
-    @component_results = [:date, :type, :sc, :ac, :description, :deposit, :withdrawal, :balance, :description2]	
-    @results = [:date_i, :data, :data_line, :dataset] + @component_results
+    @component_results = [:date, :type, :sc, :ac, :description, :deposit, :withdrawal, :balance]	
+    @results = [:date_i, :data, :data_line, :dataset, :description2, :given_withdrawal, :given_deposit] + @component_results
+    @signature_fields = [:date,:description,:deposit,:withdrawal,:account]
     def generate_input_file
       FileUtils.cp @data_file.sub(/~/, ENV['HOME']), @directory + '/data.cvs'
     end
@@ -161,6 +162,8 @@ class CodeRunner
         [:date,:description,:dummy,:deposit,:dummy]
       when /Datum,Text,Belopp/ #Ecster Credit Card
         [:date,:description,:deposit]
+      when /Effective Date,Entered Date,Transaction Description,Amount,Balance/ #QudosBank new format the first field is blank
+        [:dummy,:date,:description,:deposit,:balance]
       when /Effective Date,Entered Date,Transaction Description,Amount/ #QudosBank, the first field is blank
         [:dummy,:date,:description,:deposit]
       when /Date,Amount,Currency,Description,"Payment Reference","Running Balance","Exchange Rate","Payer Name","Payee Name","Payee Account Number",Merchant/ #TransferWise
@@ -198,11 +201,11 @@ class CodeRunner
       @data.each do |dataset|
         #next if @runner.cache[:data].include? dataset and Date.parse(dataset[0]) > Date.parse("1/1/2013")
         #next if @runner.component_run_list.map{|k,v| v.instance_variable_get(:@dataset)}.include? dataset # and Date.parse(dataset[0]) > Date.parse("1/1/2013")
-        next if @runner.component_run_list.find{|k,v| v.dataset == dataset} # and Date.parse(dataset[0]) > Date.parse("1/1/2013")
         next if @first_line_string =~ /^Datum/ and dataset[1] =~ /Reservation/
-        component = create_component
-        component.set_zeroes
-        ep 'Generating Component', @component_runs.size
+        h = {}
+        h[:withdrawal] = 0.0
+        h[:deposit] = 0.0
+        h[:account] = @account
         reslts = csv_data_fields
         reslts.each_with_index do |res,index|
           value = dataset[index]
@@ -219,19 +222,43 @@ class CodeRunner
             next unless value =~ /\d/
             value = value.to_f 
           end
-          component.set(res, value)
+          #component.set(res, value)
+          h[res] = value
         end
-        component.set(:data_line, reslts.map{|r| component.send(r).to_s}.join(','))
+        h[:data_line] =  reslts.map{|r| h[r].to_s}.join(',')
+
+        if h[:description2] and h[:description]
+          h[:description] += ":" + h[:description2]
+        end
+
+        h[:given_withdrawal] = h[:withdrawal]
+        h[:given_deposit] = h[:deposit]
+        if h[:deposit] < 0.0 and h[:withdrawal] == 0.0
+          h[:withdrawal] = -h[:deposit]
+          h[:deposit] = 0.0
+        end
+        if h[:withdrawal] < 0.0 and h[:deposit] == 0.0
+          h[:deposit] = -h[:withdrawal]
+          h[:withdrawal] = 0.0
+        end
+        next if @runner.component_run_list.find{|k,v| 
+          v.signature == rcp.signature_fields.map{|res| h[res]}
+        } # and Date.parse(dataset[0]) > Date.parse("1/1/2013")
+
+        component = create_component
+        #component.set_zeroes
+        h.each{|k,v| component.set(k,v)}
+        ep 'Generating Component', @component_runs.size
         component.set(:dataset, dataset)
         component.date_i = component.date.to_datetime.to_time.to_i
-        if component.description2 and component.description
-          component.description += ":" + component.description2
-        end
-        if component.deposit < 0.0 and component.withdrawal == 0.0
-          component.withdrawal = -component.deposit
-          component.deposit = 0.0
-        end
-        @runner.cache[:data].push dataset
+        #if component.description2 and component.description
+          #component.description += ":" + component.description2
+        #end
+        #if component.deposit < 0.0 and component.withdrawal == 0.0
+          #component.withdrawal = -component.deposit
+          #component.deposit = 0.0
+        #end
+        #@runner.cache[:data].push dataset
         component.external_account; component.sub_account # Triggers interactive account choices
         #component.account = @account
       end
@@ -244,6 +271,19 @@ class CodeRunner
     end
     def ds
       description
+    end
+    def signature
+      #[date,description,deposit,withdrawal,account]
+      rcp.signature_fields.map{|res| send(res)}
+    end
+
+    def old_data_line # For backwards compatibility issues when csv formats change
+      case @first_line_string
+      when /Effective Date,Entered Date,Transaction Description,Amount,Balance/ #QudosBank new format the first field is blank
+        data_line.sub(/,[^,]*?$/, '')
+      else
+        nil
+      end
     end
 
 

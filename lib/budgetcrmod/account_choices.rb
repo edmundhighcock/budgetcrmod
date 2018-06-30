@@ -7,15 +7,25 @@ class CodeRunner::Budget
   def external_account
     return @external_account if @external_account
     ext_account = false
+    unless @runner
+      raise "No runner for " + data_line
+    end
     Dir.chdir(@runner.root_folder) do
       chosen = false
       Hash.phoenix('account_choices.rb') do |choices_hash|
-        if choices_hash[data_line] 
+        if choices_hash[signature]
+          chosen = choices_hash[signature][:external_account]
+        elsif choices_hash[data_line] 
           #choices_hash[data_line][:external_account] = 
           #choices_hash[data_line][:external_account].to_sym #fixes earlier bug
           #choices_hash[data_line][:sub_account] = 
           #choices_hash[data_line][:sub_account].to_sym #fixes earlier bug
           chosen = choices_hash[data_line][:external_account]
+          choices_hash[signature] = choices_hash[data_line]
+          choices_hash.delete(data_line)
+        elsif choices_hash[old_data_line]
+          chosen = choices_hash[old_data_line][:external_account]
+          choices_hash[signature] = choices_hash[old_data_line]
         end
       end
       return @external_account = chosen if chosen
@@ -29,8 +39,10 @@ class CodeRunner::Budget
           puts Terminal.default_colour
           puts
           puts "-" * data_line.size
-          puts data_line
+          puts signature.inspect
           puts "-" * data_line.size
+          puts
+          puts "Account: " + account
           puts
           puts choices.inspect
           puts
@@ -117,7 +129,7 @@ class CodeRunner::Budget
         end
         next if not chosen
         Hash.phoenix('account_choices.rb') do |choices_hash|
-          choices_hash[data_line] = {external_account: ext_account, sub_account: chosen}
+          choices_hash[signature] = {external_account: ext_account, sub_account: chosen}
         end
       end #while not chosen
 
@@ -134,9 +146,10 @@ class CodeRunner::Budget
   # well can be very helpful in showing a breakdown of expenditure.
   def sub_account
     return @sub_account if @sub_account
+    puts "SIGNATURE ", signature.inspect
     Dir.chdir(@runner.root_folder) do
       external_account until (
-        choices = Hash.phoenix('account_choices.rb'){|choices_hash| choices_hash[data_line]}
+        choices = Hash.phoenix('account_choices.rb'){|choices_hash| choices_hash[signature]}
         p [choices, data_line]
       ) and choices[:sub_account]
       @sub_account = choices[:sub_account]
