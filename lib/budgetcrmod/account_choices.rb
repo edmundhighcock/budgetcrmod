@@ -149,8 +149,10 @@ class CodeRunner::Budget
     puts "SIGNATURE ", signature.inspect
     Dir.chdir(@runner.root_folder) do
       external_account until (
-        choices = Hash.phoenix('account_choices.rb'){|choices_hash| choices_hash[signature]}
-        p [choices, data_line]
+        choices = nil
+        Hash.phoenix('account_choices.rb'){|choices_hash| choices = choices_hash[signature]}
+        #p [choices, data_line]
+        choices
       ) and choices[:sub_account]
       @sub_account = choices[:sub_account]
     end
