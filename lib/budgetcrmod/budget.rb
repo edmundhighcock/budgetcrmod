@@ -259,7 +259,7 @@ class CodeRunner
           #component.deposit = 0.0
         #end
         #@runner.cache[:data].push dataset
-        component.external_account; component.sub_account # Triggers interactive account choices
+        #component.external_account; component.sub_account # Triggers interactive account choices
         #component.account = @account
       end
     end
