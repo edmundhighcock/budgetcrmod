@@ -84,11 +84,22 @@ class CodeRunner
       end
       if data[0] =~ /^\d{2} \w{3} \d\d,/ # BarclayCard format
         data.unshift 'date,description,type,user,expensetype,withdrawal,withdrawal'
+      elsif data[0] == ""
+        data.shift
       end
 
+
+
       @first_line_string = data[0].dup
+      separator = case @first_line_string
+                  when /Bokf.*ringsdag;Belopp;/
+                    ";"
+                  else
+                    ","
+                  end
+      puts "Separator is: " + separator
       data = data.map do 	|line| 
-        matches = line.scan(Regexp.new("((?:#{DOUBLE_STRING}|[^,])*)(?:,|$)"))
+        matches = line.scan(Regexp.new("((?:#{DOUBLE_STRING}|[^#{separator}])*)(?:#{separator}|$)"))
         pp matches
         matches.flatten
       end
@@ -158,6 +169,8 @@ class CodeRunner
         [:date,:description,:type,:dummy,:dummy, :withdrawal, :withdrawal]
       when /Datum,Transaktion,Kategori,Belopp,Saldo/ # Nordea.se privat, Belopp is positive when the asset increases
         [:date,:description,:dummy,:deposit,:balance]
+      when /Bokföringsdag;Belopp;Avsändare;Mottagare;Namn;Rubrik;Saldo;Valuta/ # Nordea new
+        [:date,:deposit,:dummy,:dummy,:dummy,:description,:balance,:dummy]
       when /Bokföringsdatum,Transaktionsreferens,Mottagare,Belopp,Valuta/ # Forex.se privat, Belopp is positive when the asset increases
         [:date,:description,:dummy,:deposit,:dummy]
       when /Datum,Text,Belopp/ #Ecster Credit Card
@@ -170,6 +183,8 @@ class CodeRunner
         [:date,:deposit,:dummy,:description,:dummy,:balance,:dummy,:dummy,:dummy,:dummy,:dummy]
       when /"TransferWise ID",Date,Amount,Currency,Description,"Payment Reference","Running Balance","Exchange From","Exchange To","Exchange Rate","Payer Name","Payee Name","Payee Account Number",Merchant,"Total fees"/ #TransferWise New
         [:dummy,:date,:deposit,:dummy,:description,:description2,:balance,:dummy,:dummy,:dummy,:dummy,:dummy,:dummy,:dummy,:dummy]
+      else
+        raise "unknown data format for #@id: #@first_line_string, #{@data.slice(0,[4,@data.size].min)}"
       end
     end
 
@@ -202,6 +217,7 @@ class CodeRunner
         #next if @runner.cache[:data].include? dataset and Date.parse(dataset[0]) > Date.parse("1/1/2013")
         #next if @runner.component_run_list.map{|k,v| v.instance_variable_get(:@dataset)}.include? dataset # and Date.parse(dataset[0]) > Date.parse("1/1/2013")
         next if @first_line_string =~ /^Datum/ and dataset[1] =~ /Reservation/
+        next if @first_line_string =~ /Bokf/ and dataset[0] =~ /Invalid/
         h = {}
         h[:withdrawal] = 0.0
         h[:deposit] = 0.0
@@ -213,7 +229,7 @@ class CodeRunner
           value = Date.parse value if res == :date
           if [:deposit, :withdrawal, :balance].include? res
             case @first_line_string
-            when /^Datum/i # we are dealing with European numbers
+            when /^Datum/i, /Bokföringsdag;Belopp;/ # we are dealing with European numbers
               value = value.gsub(/[." ]/, '')
               value = value.sub(/[,]/, '.')
             else
